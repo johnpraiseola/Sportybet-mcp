@@ -2,13 +2,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-
 import { loadConfig } from "../../src/config.js";
 import { SportyBetClient } from "../../src/client.js";
 import {
-  sportybetBookBet,
   sportybetCalculateCombinedOdds,
-  sportybetGetBookingStatus,
   sportybetGetFixtures,
   sportybetGetMarkets,
   sportybetGetOdds,
@@ -19,7 +16,7 @@ export const config = {
   path: "/mcp",
   rateLimit: {
     windowSize: 60,
-    windowLimit: 60,
+    windowLimit: 10,
     aggregateBy: ["ip"],
   },
 };
@@ -29,22 +26,9 @@ export default async function handler(request: Request): Promise<Response> {
     return new Response("Use POST for MCP requests.", { status: 405 });
   }
 
-  const token = process.env.MCP_BEARER_TOKEN;
-  if (!token) {
-    return new Response("Server token is not configured.", { status: 503 });
-  }
-
-  if (request.headers.get("authorization") !== `Bearer ${token}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
   const appConfig = loadConfig();
   const client = new SportyBetClient(appConfig);
-
-  const server = new McpServer({
-    name: "sportybet",
-    version: "1.0.0",
-  });
+  const server = new McpServer({ name: "sportybet", version: "1.0.0" });
 
   server.registerTool("sportybet_get_fixtures", {
     title: "Get upcoming SportyBet football fixtures",
@@ -88,26 +72,6 @@ export default async function handler(request: Request): Promise<Response> {
     },
   }, (args) => sportybetCalculateCombinedOdds(args));
 
-  server.registerTool("sportybet_book_bet", {
-    title: "Prepare a SportyBet booking code",
-    description: "Validate selections and prepare a shareable booking code. NEVER places or stakes a wager.",
-    inputSchema: {
-      selections: z.array(z.object({
-        eventId: z.string().min(1),
-        marketId: z.string().min(1),
-        outcomeId: z.string().min(1),
-        specifier: z.string().nullish(),
-        odds: z.number().positive().optional(),
-      })).min(1).max(20),
-    },
-  }, (args) => sportybetBookBet(client, args));
-
-  server.registerTool("sportybet_get_booking_status", {
-    title: "Check a SportyBet booking code",
-    description: "Read the details and status of a previously prepared booking code. Does not place a wager.",
-    inputSchema: { bookingCode: z.string().min(4).max(12) },
-  }, (args) => sportybetGetBookingStatus(client, args));
-
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -119,5 +83,7 @@ export default async function handler(request: Request): Promise<Response> {
   } catch (error) {
     console.error("SportyBet MCP error:", error);
     return new Response("MCP request failed.", { status: 500 });
+  } finally {
+    await transport.close().catch(() => {});
   }
 }
